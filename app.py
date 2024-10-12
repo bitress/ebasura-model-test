@@ -83,7 +83,6 @@ def browse_file():
     if file_path:
         recognize_image(file_path)
 
-
 # Create Tkinter window
 root = tk.Tk()
 root.title("Object Recognition App")
