@@ -1,9 +1,6 @@
 import numpy as np
 import tensorflow as tf
 import cv2
-import tkinter as tk
-from tkinter import filedialog, Label, Button
-from PIL import Image, ImageTk
 
 # Load the TFLite model
 interpreter = tf.lite.Interpreter(model_path="model.tflite")
@@ -14,90 +11,98 @@ input_details = interpreter.get_input_details()
 output_details = interpreter.get_output_details()
 
 
-# Preprocessing function
-def preprocess_image(image_path):
-    # Load the image using OpenCV
-    image = cv2.imread(image_path)
-    if image is None:
-        raise FileNotFoundError(f"Could not load image at {image_path}")
-
-    # Convert the image to grayscale if required
+# Preprocessing function for a single frame
+def preprocess_frame(frame):
+    # Convert the image to grayscale if required by the model
     input_shape = input_details[0]['shape']
     if input_shape[-1] == 1:
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-    # Resize the image to match the model input size
+    # Resize the frame to match the model input size
     height, width = int(input_shape[1]), int(input_shape[2])
-    image_resized = cv2.resize(image, (width, height))
+    frame_resized = cv2.resize(frame, (width, height))
 
-    # Normalize the image
-    image_normalized = image_resized / 255.0
+    # Normalize the frame
+    frame_normalized = frame_resized / 255.0
 
     # Expand dimensions to match the input shape
     if input_shape[-1] == 1:
-        input_tensor = np.expand_dims(image_normalized, axis=-1)  # Add channel dimension for grayscale
+        input_tensor = np.expand_dims(frame_normalized, axis=-1)  # Add channel dimension for grayscale
     else:
-        input_tensor = image_normalized
+        input_tensor = frame_normalized
 
     input_tensor = np.expand_dims(input_tensor, axis=0).astype(np.float32)  # Add batch dimension
-    return input_tensor, image
+    return input_tensor
 
 
-# Function to run inference and display results
-def recognize_image(image_path):
+# Function to run inference on a frame and return all predictions
+def recognize_frame(frame):
     try:
-        # Preprocess the image
-        input_tensor, original_image = preprocess_image(image_path)
+        # Preprocess the frame
+        input_tensor = preprocess_frame(frame)
 
         # Set input tensor and run inference
         interpreter.set_tensor(input_details[0]['index'], input_tensor)
         interpreter.invoke()
         output_data = interpreter.get_tensor(output_details[0]['index'])
-        predicted_index = np.argmax(output_data[0])
 
         # Load labels
         labels = []
         with open('labels.txt', 'r') as f:
             labels = [line.strip() for line in f.readlines()]
 
-        predicted_label = labels[predicted_index]
-        confidence = output_data[0][predicted_index]
+        # Pair each label with its confidence score
+        predictions = {labels[i]: output_data[0][i] for i in range(len(labels))}
 
-        # Display prediction result
-        result_label.config(text=f"Predicted Label: {predicted_label} ({confidence * 100:.2f}%)")
+        # Sort predictions by confidence, highest first
+        sorted_predictions = sorted(predictions.items(), key=lambda x: x[1], reverse=True)
 
-        # Display the image
-        image_rgb = cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB)
-        img_pil = Image.fromarray(image_rgb)
-        img_tk = ImageTk.PhotoImage(img_pil)
-        image_label.config(image=img_tk)
-        image_label.image = img_tk
+        return sorted_predictions
 
     except Exception as e:
-        result_label.config(text=f"Error during processing: {str(e)}")
+        print(f"Error during processing: {str(e)}")
+        return None
 
 
-# Function to browse and select an image file
-def browse_file():
-    file_path = filedialog.askopenfilename()
-    if file_path:
-        recognize_image(file_path)
+# Initialize webcam
+cap = cv2.VideoCapture(0)
 
-# Create Tkinter window
-root = tk.Tk()
-root.title("Object Recognition App")
+if not cap.isOpened():
+    print("Error: Could not open webcam.")
+    exit()
 
-# Create a button to upload an image
-browse_button = Button(root, text="Upload Image", command=browse_file)
-browse_button.pack()
+while True:
+    # Capture frame-by-frame from webcam
+    ret, frame = cap.read()
+    if not ret:
+        print("Failed to grab frame")
+        break
 
-# Label to display the result
-result_label = Label(root, text="Upload an image to start recognition", pady=10)
-result_label.pack()
+    # Display the live feed
+    cv2.imshow('Live Camera - Press 1 to Capture and Predict', frame)
 
-# Label to display the uploaded image
-image_label = Label(root)
-image_label.pack()
+    # Wait for key press and check if '1' is pressed
+    key = cv2.waitKey(1) & 0xFF
+    if key == ord('1'):
+        # Capture the current frame and make prediction
+        predictions = recognize_frame(frame)
 
-# Run the Tkinter event loop
-root.mainloop()
+        if predictions is not None:
+            y_offset = 30
+            for label, confidence in predictions:
+                # Display each label and confidence on the captured frame
+                cv2.putText(frame, f"{label}: {confidence * 100:.2f}%", (10, y_offset),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                y_offset += 30
+
+            # Show the captured frame with all predictions
+            cv2.imshow('Captured Image - All Predictions', frame)
+            cv2.waitKey(0)  # Wait until any key is pressed to close the prediction window
+
+    # Break the loop if 'q' is pressed
+    if key == ord('q'):
+        break
+
+# When everything is done, release the capture and close windows
+cap.release()
+cv2.destroyAllWindows()
